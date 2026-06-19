@@ -72,6 +72,8 @@ export default function App() {
   // Null while an op is mid-walk, which disables the action buttons.
   const base = canStartNew ? (op ? applyOp(cluster, op) : cluster) : null
   const hasBuffered = !!base && base.shards.some((s) => s.buffer.length > 0)
+  const hasPendingDelete =
+    !!base && Object.values(base.docs).some((d) => d.deleted && !d.purged)
   const hasUncommitted =
     !!base && base.shards.some((s) => s.segments.some((seg) => !seg.committed))
   const hasMergeable =
@@ -87,7 +89,7 @@ export default function App() {
   // tokens to the correct shard and tint them before the op actually starts.
   const nextShard = routeShard(`doc-${docNum.current}`)
   const nextColor = DOC_COLORS[(docNum.current - 1) % DOC_COLORS.length]
-  const canRefresh = hasBuffered && !playing
+  const canRefresh = (hasBuffered || hasPendingDelete) && !playing
   const canFlush = hasUncommitted && !playing
   const canMerge = hasMergeable && !playing
   const canSearch = hasSearchable && query.trim() && !playing
@@ -158,12 +160,18 @@ export default function App() {
     const flip = (c) => {
       const d = c.docs[id]
       if (!d) return c
-      return { ...c, docs: { ...c.docs, [id]: { ...d, deleted: !d.deleted } } }
+      // Delete records a tombstone; the doc stays searchable until the next
+      // refresh applies it (sets `purged`). Undo fully restores the doc.
+      const next = d.deleted
+        ? { ...d, deleted: false, purged: false }
+        : { ...d, deleted: true }
+      return { ...c, docs: { ...c.docs, [id]: next } }
     }
     // A finished op is still "active" and re-derived every render. For a completed
-    // MERGE that means tombstoning a doc now would be reactively reclaimed (removed
-    // immediately) instead of waiting for the next merge. So, like start(), fold the
-    // finished op into the committed cluster first, then tombstone against that.
+    // REFRESH that means a fresh tombstone would be applied (purged) immediately on
+    // re-derivation instead of waiting for the next refresh; a completed MERGE could
+    // likewise reclaim an applied delete. So, like start(), fold the finished op
+    // into the committed cluster first, then tombstone against that.
     if (op && opDone && op.type !== 'search') {
       setCluster(flip(applyOp(cluster, op)))
       setOp(null)
@@ -264,7 +272,13 @@ export default function App() {
                 <div key={d.id} className={'doc-row' + (d.deleted ? ' deleted' : '')}>
                   <span className="dot" style={{ background: d.color }} />
                   <span className="doc-id">{d.id}</span>
-                  <span className="doc-shard">→ shard {d.shard}</span>
+                  <span className="doc-shard">
+                    {d.deleted
+                      ? d.purged
+                        ? 'deleted'
+                        : 'tombstoned · refresh to apply'
+                      : `→ shard ${d.shard}`}
+                  </span>
                   <button className="mini" onClick={() => toggleDelete(d.id)}>
                     {d.deleted ? 'undo' : 'delete'}
                   </button>

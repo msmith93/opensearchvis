@@ -230,6 +230,14 @@ export function deriveCluster(cluster, op) {
       })
       if (s >= 1) shard.buffer = []
     }
+    // A refresh also applies pending deletes: each tombstoned doc becomes
+    // `purged`, leaving the searchable view (inverted index + search). It stays
+    // physically in its segment until a merge reclaims it. Replace the doc object
+    // (don't mutate) — cloneCluster shares doc refs with the committed cluster.
+    if (s >= 1)
+      for (const id of Object.keys(c.docs))
+        if (c.docs[id].deleted && !c.docs[id].purged)
+          c.docs[id] = { ...c.docs[id], purged: true }
   } else if (op.type === 'flush') {
     for (const shard of c.shards) {
       if (s >= 0)
@@ -245,11 +253,12 @@ export function deriveCluster(cluster, op) {
         const keep = []
         for (const seg of mergeable)
           for (const id of seg.docIds)
-            if (!c.docs[id]?.deleted) keep.push(id)
-        // physically reclaim tombstoned docs
+            if (!c.docs[id]?.purged) keep.push(id)
+        // physically reclaim deletes a refresh has already applied; a tombstone
+        // that hasn't been refreshed yet is still live and survives the merge
         for (const seg of mergeable)
           for (const id of seg.docIds)
-            if (c.docs[id]?.deleted) delete c.docs[id]
+            if (c.docs[id]?.purged) delete c.docs[id]
         const others = shard.segments.filter((seg) => !seg.searchable)
         shard.segments = [
           ...others,
@@ -292,8 +301,23 @@ export function opExtra(cluster, op) {
     }
   }
   if (op.type === 'refresh') {
+    // Refresh touches a shard if it has buffered docs to segment OR a tombstone
+    // to apply (a searchable segment holding a not-yet-purged deleted doc).
+    const hasPendingDelete = (sh) =>
+      sh.segments.some(
+        (seg) =>
+          seg.searchable &&
+          seg.docIds.some((id) => {
+            const d = cluster.docs[id]
+            return d && d.deleted && !d.purged
+          }),
+      )
     return {
-      refresh: { shards: cluster.shards.filter((sh) => sh.buffer.length > 0).map((sh) => sh.id) },
+      refresh: {
+        shards: cluster.shards
+          .filter((sh) => sh.buffer.length > 0 || hasPendingDelete(sh))
+          .map((sh) => sh.id),
+      },
     }
   }
   if (op.type === 'merge') {
@@ -332,7 +356,9 @@ function computeSearch(cluster, op) {
     const hits = []
     for (const id of docIds) {
       const doc = cluster.docs[id]
-      if (!doc || doc.deleted) continue
+      // Tombstoned-but-not-yet-refreshed docs are still searchable (purged is
+      // set by a refresh); only purged docs drop out of results.
+      if (!doc || doc.purged) continue
       let score = 0
       for (const t of terms) {
         score += doc.tokens.title.filter((x) => x === t).length
@@ -358,7 +384,9 @@ export function shardInvertedIndex(shard, docs) {
     if (!seg.searchable) continue
     for (const id of seg.docIds) {
       const doc = docs[id]
-      if (!doc || doc.deleted) continue
+      // A tombstoned doc stays in the index until a refresh applies the delete
+      // (purged); only then does it leave the searchable inverted index.
+      if (!doc || doc.purged) continue
       for (const field of ['title', 'body'])
         for (const term of doc.tokens[field]) {
           if (!map.has(term)) map.set(term, new Set())
