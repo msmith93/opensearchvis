@@ -15,6 +15,11 @@ export function selectorRect(selector) {
   return el ? el.getBoundingClientRect() : null
 }
 
+// How long a batch of n token chips takes to fly, in ms: a fixed lead-in/out
+// plus a per-token stagger. Shared so the step scheduler can reserve enough time
+// for whatever a flight will actually need (see stepDuration in operations.js).
+export const flightMs = (n) => 750 + 90 * n
+
 // A fixed, click-through layer that flies a batch of token chips from a source
 // point to a target point with a small stagger, then calls onComplete. Shared by
 // the index overlay (form → shard buffer) and refresh (segment → inverted index).
@@ -27,8 +32,7 @@ export default function FlyingTokens({ tokens, from, to, onComplete, spread = 18
       onComplete?.()
       return
     }
-    const total = 300 + tokens.length * 90 + 450
-    const id = setTimeout(() => onComplete?.(), total)
+    const id = setTimeout(() => onComplete?.(), flightMs(tokens.length))
     return () => clearTimeout(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

@@ -25,9 +25,9 @@ export default function IndexOverlay({
   docColor,
   onIndex,
   op,
+  playing,
   phase,
   setPhase,
-  setPlaying,
 }) {
   const [tokens, setTokens] = useState([])
   const [flight, setFlight] = useState(null) // { from, to } — analysis → primary
@@ -79,7 +79,6 @@ export default function IndexOverlay({
 
   function finishEmit() {
     setFlight(null)
-    setPlaying(true) // resume the op: advance from analysis → buffer → replicate
   }
 
   // The doc's data copying from its primary shard to the replica on another node.
@@ -103,10 +102,10 @@ export default function IndexOverlay({
     } else if (step === 1) {
       setTarget(anchorTarget(shardSel, 0.5))
     } else if (step === 2) {
-      // Park at the shard and grow so the analysis is readable. Hold the op here
-      // (pause) so the scan → tokens-in-box → fly sequence gets room to breathe.
+      // Park at the shard and grow so the analysis is readable. The scheduler
+      // reserves a longer duration for this step (stepDuration), so the scan →
+      // tokens-in-box → fly sequence runs to completion before it advances.
       setTarget(anchorTarget(shardSel, 0.85))
-      setPlaying(false)
       setScanning(true)
       const t1 = setTimeout(() => {
         setScanning(false)
@@ -125,11 +124,23 @@ export default function IndexOverlay({
     } else {
       setDocHidden(true)
       beginReplicate() // last step: copy to the replica on another node
-      const t = setTimeout(() => setPhase('done'), 1600)
-      return () => clearTimeout(t)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, op?.step])
+
+  // Close the overlay once auto-play finishes the final (replicate) step: the
+  // scheduler holds `playing` true through that step's dwell, then drops it —
+  // so the replica flight has landed by the time we flip to 'done'.
+  useEffect(() => {
+    if (
+      phase === 'flying' &&
+      op?.type === 'index' &&
+      op.step >= lastStep('index') &&
+      !playing
+    ) {
+      setPhase('done')
+    }
+  }, [phase, op, playing, setPhase])
 
   // Reset transient bits whenever we return to the editing form.
   useEffect(() => {

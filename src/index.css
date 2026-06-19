@@ -683,7 +683,7 @@ table.ii td.term {
 }
 @keyframes scan-sweep {
   0% {
-    transform: translateY(-40px);
+    top: -40px;
     opacity: 0;
   }
   10% {
@@ -693,7 +693,7 @@ table.ii td.term {
     opacity: 1;
   }
   100% {
-    transform: translateY(100%);
+    top: 100%;
     opacity: 0;
   }
 }

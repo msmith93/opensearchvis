@@ -12,6 +12,7 @@ import {
   deriveCluster,
   lastStep,
   opExtra,
+  stepDuration,
   stepsFor,
 } from './operations'
 import ClusterStage from './components/ClusterStage'
@@ -28,7 +29,7 @@ export default function App() {
   const [op, setOp] = useState(null) // { type, step, payload }
   const [opDone, setOpDone] = useState(false)
   const [playing, setPlaying] = useState(false)
-  const [indexPhase, setIndexPhase] = useState('editing') // overlay choreography phase
+  const [indexPhase, setIndexPhase] = useState('closed') // overlay choreography phase
 
   const [title, setTitle] = useState(PRESETS[0].title)
   const [body, setBody] = useState(PRESETS[0].body)
@@ -40,28 +41,31 @@ export default function App() {
   const last = op ? lastStep(op.type) : -1
 
   // Mark the op complete once it reaches the final step (survives scrubbing).
+  // `playing` is left alone here so the scheduler below can run the last step's
+  // dwell — letting the replica/return flight land — before it stops auto-play.
   useEffect(() => {
-    if (op && op.step >= lastStep(op.type)) {
-      setOpDone(true)
-      setPlaying(false)
-    }
+    if (op && op.step >= lastStep(op.type)) setOpDone(true)
   }, [op])
-
-  // Auto-play: advance one step on an interval.
-  useEffect(() => {
-    if (!playing || !op) return
-    const id = setInterval(() => {
-      setOp((prev) =>
-        prev && prev.step < lastStep(prev.type)
-          ? { ...prev, step: prev.step + 1 }
-          : prev,
-      )
-    }, 1500)
-    return () => clearInterval(id)
-  }, [playing, op])
 
   const derived = deriveCluster(cluster, op)
   const extra = opExtra(cluster, op)
+
+  // Auto-play: the single timeline clock. Each step declares its own duration
+  // (stepDuration); when it elapses we advance — or, at the last step, stop,
+  // which gives the final flight its dwell. The effect re-subscribes on
+  // [playing, op], so manual Prev/Next/Pause (which change those) cancel any
+  // pending timer. `extra` is read for content-aware search durations but is
+  // intentionally NOT a dep: it gets a fresh value on every op change.
+  useEffect(() => {
+    if (!playing || !op) return
+    const atLast = op.step >= lastStep(op.type)
+    const id = setTimeout(() => {
+      if (atLast) setPlaying(false)
+      else setOp((prev) => (prev ? { ...prev, step: prev.step + 1 } : prev))
+    }, stepDuration(op, extra))
+    return () => clearTimeout(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, op])
   const canStartNew = op === null || opDone
 
   // The committed cluster as it will be once the current (completed) op folds in.
@@ -174,7 +178,7 @@ export default function App() {
     setOp(null)
     setOpDone(false)
     setPlaying(false)
-    setIndexPhase('editing')
+    setIndexPhase('closed')
     docNum.current = 1
     segNum.current = 1
   }
@@ -213,13 +217,13 @@ export default function App() {
             </button>
           </div>
 
-          {indexPhase === 'done' && (
+          {(indexPhase === 'closed' || indexPhase === 'done') && (
             <button
               className="btn primary block"
               style={{ marginTop: 14 }}
               onClick={() => setIndexPhase('editing')}
             >
-              ＋ Index another document
+              ＋ Index a document
             </button>
           )}
 
@@ -330,9 +334,9 @@ export default function App() {
         docColor={nextColor}
         onIndex={startIndex}
         op={op}
+        playing={playing}
         phase={indexPhase}
         setPhase={setIndexPhase}
-        setPlaying={setPlaying}
       />
 
       {/* ---------------- Overlay: search scatter-gather flights ---------------- */}
