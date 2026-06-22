@@ -152,6 +152,49 @@ export const OP_LABELS = {
   search: 'Search',
 }
 
+// The close-up (shard inspector) walks these steps to show what ONE shard does
+// during the query phase. They are independent of the global op (which stays
+// frozen on the search `local` step while the inspector is open) and are driven
+// by a mini-stepper inside the inspector. Shaped like OP_STEPS.
+export const LOCAL_SEARCH_STEPS = [
+  {
+    key: 'analyze',
+    title: '1 · Analyze the query',
+    blurb:
+      'The shard analyzes the query string with the same analyzer used at index time, turning it into the list of terms to look up.',
+  },
+  {
+    key: 'lookup',
+    title: '2 · Look up terms per segment',
+    blurb:
+      'A shard is several immutable segments, each with its OWN term dictionary. Every query term is looked up in every segment’s dictionary to find that term’s posting list.',
+  },
+  {
+    key: 'postings',
+    title: '3 · Walk the posting lists',
+    blurb:
+      'Each matched term’s posting list names the docs that contain it. Their union (across terms and segments) is the candidate set; tombstoned / un-refreshed docs are skipped.',
+  },
+  {
+    key: 'score',
+    title: '4 · Score each candidate',
+    blurb:
+      'Each candidate is scored by how often the query terms appear in it. Real Lucene uses BM25 (term frequency, inverse document frequency, field-length norm); here we simplify to a term-frequency count.',
+  },
+  {
+    key: 'topk',
+    title: '5 · Keep the top hits',
+    blurb:
+      'A fixed-size priority queue keeps only the k highest-scoring docs; lower scores are evicted as better ones arrive. This is the shard’s local ranking.',
+  },
+  {
+    key: 'return',
+    title: '6 · Return ids + scores',
+    blurb:
+      'The shard returns only doc ids + scores to the coordinator — not the documents. The coordinator merges these with the other shards’ hits before fetching full sources.',
+  },
+]
+
 export const stepsFor = (type) => OP_STEPS[type] || []
 export const lastStep = (type) => stepsFor(type).length - 1
 
@@ -377,24 +420,97 @@ function computeSearch(cluster, op) {
   return { terms, serving, perShard, merged }
 }
 
-// Build a shard's inverted index (term -> docIds) from its searchable segments.
+// Sort a term->docIds Map into the [{term, docIds}] rows the UI renders.
+const indexRows = (map) =>
+  [...map.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([term, ids]) => ({ term, docIds: [...ids] }))
+
+// Build ONE segment's inverted index (term -> docIds). A tombstoned doc stays in
+// the index until a refresh applies the delete (purged); only then does it leave.
+export function segmentInvertedIndex(seg, docs) {
+  const map = new Map()
+  for (const id of seg.docIds) {
+    const doc = docs[id]
+    if (!doc || doc.purged) continue
+    for (const field of ['title', 'body'])
+      for (const term of doc.tokens[field]) {
+        if (!map.has(term)) map.set(term, new Set())
+        map.get(term).add(id)
+      }
+  }
+  return indexRows(map)
+}
+
+// Build a shard's inverted index by merging its searchable segments' indexes.
 export function shardInvertedIndex(shard, docs) {
   const map = new Map()
   for (const seg of shard.segments) {
     if (!seg.searchable) continue
-    for (const id of seg.docIds) {
-      const doc = docs[id]
-      // A tombstoned doc stays in the index until a refresh applies the delete
-      // (purged); only then does it leave the searchable inverted index.
-      if (!doc || doc.purged) continue
-      for (const field of ['title', 'body'])
-        for (const term of doc.tokens[field]) {
-          if (!map.has(term)) map.set(term, new Set())
-          map.get(term).add(id)
-        }
+    for (const { term, docIds } of segmentInvertedIndex(seg, docs)) {
+      if (!map.has(term)) map.set(term, new Set())
+      for (const id of docIds) map.get(term).add(id)
     }
   }
-  return [...map.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([term, ids]) => ({ term, docIds: [...ids] }))
+  return indexRows(map)
+}
+
+// What ONE segment physically stores, as data for the close-up's anatomy view:
+// its inverted index (term dictionary + postings, via segmentInvertedIndex), the
+// stored _source of each doc, and each doc's delete state (the live-docs bitset).
+// Pure derivation — no model change. Includes purged docs in `docs` so the bitset
+// can show them, even though segmentInvertedIndex omits them from `terms`.
+export function segmentAnatomy(seg, docs) {
+  return {
+    id: seg.id,
+    terms: segmentInvertedIndex(seg, docs),
+    docs: seg.docIds
+      .map((id) => docs[id])
+      .filter(Boolean)
+      .map((d) => ({
+        id: d.id,
+        title: d.title,
+        body: d.body,
+        deleted: !!d.deleted,
+        purged: !!d.purged,
+      })),
+  }
+}
+
+// The shard-local query phase, as data for the inspector's stepped close-up. Pure
+// like computeSearch, and uses the SAME term-frequency scoring so the numbers here
+// match the cluster-level results panel.
+export function computeShardSearch(shard, terms, docs, k = 3) {
+  const termSet = new Set(terms)
+  const segments = shard.segments
+    .filter((seg) => seg.searchable)
+    .map((seg) => ({ id: seg.id, rows: segmentInvertedIndex(seg, docs) }))
+
+  // Candidate docs = those appearing in a matched (query-term) posting list.
+  const candidateSet = new Set()
+  for (const seg of segments)
+    for (const row of seg.rows)
+      if (termSet.has(row.term)) for (const id of row.docIds) candidateSet.add(id)
+  const candidates = [...candidateSet].sort((a, b) => a.localeCompare(b))
+
+  const scored = candidates
+    .map((docId) => {
+      const doc = docs[docId]
+      const perTerm = {}
+      let score = 0
+      for (const t of terms) {
+        const tf =
+          doc.tokens.title.filter((x) => x === t).length +
+          doc.tokens.body.filter((x) => x === t).length
+        if (tf > 0) {
+          perTerm[t] = tf
+          score += tf
+        }
+      }
+      return { docId, perTerm, score }
+    })
+    .sort((a, b) => b.score - a.score || a.docId.localeCompare(b.docId))
+
+  const topk = scored.slice(0, k).map(({ docId, score }) => ({ docId, score }))
+  return { segments, candidates, scored, topk, k }
 }

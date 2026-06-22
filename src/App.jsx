@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { motion } from 'framer-motion'
 import { analyzeDoc } from './analyzer'
-import { PRESETS, EXAMPLE_QUERIES } from './presets'
+import { PRESETS, EXAMPLE_QUERIES, SAMPLE_DOCS } from './presets'
 import {
   initialCluster,
   routeShard,
@@ -20,7 +21,9 @@ import IndexOverlay from './components/IndexOverlay'
 import InvertedIndexTable from './components/InvertedIndexTable'
 import SearchFlight from './components/SearchFlight'
 import SearchResultsPanel from './components/SearchResultsPanel'
+import ShardInspector from './components/ShardInspector'
 import Stepper from './components/Stepper'
+import { selectorRect } from './components/tokenFlight'
 
 const DOC_COLORS = ['#00a3e0', '#3d7fd0', '#e0a04a', '#4ec97a', '#e0574a', '#9b7fe0']
 
@@ -30,6 +33,8 @@ export default function App() {
   const [opDone, setOpDone] = useState(false)
   const [playing, setPlaying] = useState(false)
   const [indexPhase, setIndexPhase] = useState('closed') // overlay choreography phase
+  const [zoomShard, setZoomShard] = useState(null) // shard id being inspected, or null
+  const [zoomOrigin, setZoomOrigin] = useState('50% 50%') // transform-origin of the dive
 
   const [title, setTitle] = useState(PRESETS[0].title)
   const [body, setBody] = useState(PRESETS[0].body)
@@ -46,6 +51,35 @@ export default function App() {
   useEffect(() => {
     if (op && op.step >= lastStep(op.type)) setOpDone(true)
   }, [op])
+
+  // The magnifying glass only lives on the local-search phase. Close any open
+  // inspector when the op/step leaves that phase so it can't linger as a stale
+  // overlay (e.g. after Prev/Next, Play advancing, or starting a new op).
+  const inLocalPhase = op?.type === 'search' && op.step === 2
+  useEffect(() => {
+    if (!inLocalPhase) setZoomShard(null)
+  }, [inLocalPhase])
+
+  // Opening the inspector freezes the timeline so auto-play can't advance off the
+  // local phase while the user is inspecting a shard. We also compute the dive's
+  // transform-origin — the clicked shard's center expressed in % of the .layout
+  // box — so the whole view appears to rush toward that shard (see the .layout
+  // motion.div below). DOM is at rest at click time, so the rects are accurate.
+  function openZoom(id) {
+    setPlaying(false)
+    const role = extra.search?.serving?.[id]?.role
+    const card = selectorRect(
+      role === 'replica' ? `[data-replica-target="${id}"]` : `[data-shard-target="${id}"]`,
+    )
+    const layout = selectorRect('.layout')
+    if (card && layout && layout.width && layout.height) {
+      const ox = ((card.left + card.width / 2 - layout.left) / layout.width) * 100
+      const oy = ((card.top + card.height / 2 - layout.top) / layout.height) * 100
+      setZoomOrigin(`${ox.toFixed(1)}% ${oy.toFixed(1)}%`)
+    }
+    setZoomShard(id)
+  }
+  const closeZoom = () => setZoomShard(null)
 
   const derived = deriveCluster(cluster, op)
   const extra = opExtra(cluster, op)
@@ -181,6 +215,52 @@ export default function App() {
     }
   }
 
+  // Seed a ready-to-search cluster directly: build the sample docs, route each by
+  // id, and place them into searchable+committed segments (≤2 docs each) grouped by
+  // shard. This gives a zoomed shard several docs across multiple segments so the
+  // close-up's scoring + priority-queue steps have something to show.
+  function loadSampleDocs() {
+    const c = initialCluster()
+    const byShard = { 0: [], 1: [], 2: [] }
+    // Tombstone one doc so the close-up's deletes (live-docs) bitset isn't trivial.
+    // It stays a tombstone (not purged), so per the SPEC guardrail it is still
+    // searchable until a refresh applies the delete.
+    const tombstoned = 'doc-8'
+    SAMPLE_DOCS.forEach((d, i) => {
+      const id = `doc-${i + 1}`
+      const doc = {
+        id,
+        title: d.title,
+        body: d.body,
+        tokens: analyzeDoc({ title: d.title, body: d.body }),
+        deleted: id === tombstoned,
+        color: DOC_COLORS[i % DOC_COLORS.length],
+        shard: routeShard(id),
+      }
+      c.docs[id] = doc
+      byShard[doc.shard].push(id)
+    })
+    let seg = 1
+    for (const shard of c.shards) {
+      const ids = byShard[shard.id]
+      for (let j = 0; j < ids.length; j += 2)
+        shard.segments.push({
+          id: `seg-${seg++}`,
+          docIds: ids.slice(j, j + 2),
+          searchable: true,
+          committed: true,
+        })
+    }
+    setCluster(c)
+    setOp(null)
+    setOpDone(false)
+    setPlaying(false)
+    setIndexPhase('closed')
+    setZoomShard(null)
+    docNum.current = SAMPLE_DOCS.length + 1
+    segNum.current = seg
+  }
+
   function reset() {
     setCluster(initialCluster())
     setOp(null)
@@ -206,7 +286,16 @@ export default function App() {
         </span>
       </div>
 
-      <div className="layout">
+      <motion.div
+        className="layout"
+        style={{ transformOrigin: zoomOrigin }}
+        animate={
+          zoomShard != null
+            ? { scale: 1.7, opacity: 0 }
+            : { scale: 1, opacity: 1 }
+        }
+        transition={{ type: 'tween', ease: 'easeInOut', duration: 0.5 }}
+      >
         {/* ---------------- Left: controls ---------------- */}
         <div className="col">
           <p className="section-title">Lifecycle</p>
@@ -234,6 +323,10 @@ export default function App() {
               ＋ Index a document
             </button>
           )}
+
+          <button className="btn block" style={{ marginTop: 8 }} onClick={loadSampleDocs}>
+            Load sample docs
+          </button>
 
           <p className="section-title" style={{ marginTop: 20 }}>
             Search
@@ -291,7 +384,7 @@ export default function App() {
         {/* ---------------- Center: cluster ---------------- */}
         <div className="col">
           <p className="section-title">Cluster</p>
-          <ClusterStage cluster={derived} extra={extra} op={op} />
+          <ClusterStage cluster={derived} extra={extra} op={op} onZoom={openZoom} />
         </div>
 
         {/* ---------------- Right: explain + inspector ---------------- */}
@@ -322,7 +415,7 @@ export default function App() {
             <InvertedIndexTable cluster={derived} />
           )}
         </div>
-      </div>
+      </motion.div>
 
       {/* ---------------- Bottom: stepper ---------------- */}
       <Stepper
@@ -355,6 +448,15 @@ export default function App() {
 
       {/* ---------------- Overlay: search scatter-gather flights ---------------- */}
       <SearchFlight op={op} search={extra.search} docs={derived.docs} />
+
+      {/* ---------------- Overlay: zoom into a serving shard's local search ---------------- */}
+      <ShardInspector
+        shard={zoomShard != null ? derived.shards.find((s) => s.id === zoomShard) : null}
+        search={extra.search}
+        docs={derived.docs}
+        query={op?.type === 'search' ? op.payload.query : ''}
+        onClose={closeZoom}
+      />
     </div>
   )
 }

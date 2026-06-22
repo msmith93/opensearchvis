@@ -816,3 +816,497 @@ table.ii td.term {
   text-overflow: ellipsis;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
 }
+
+/* ================= Shard inspector (zoom into local search) ================= */
+.magnify-btn {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  z-index: 2;
+  padding: 0;
+  width: 20px;
+  height: 20px;
+  line-height: 1;
+  font-size: 11px;
+  border: 1px solid var(--good);
+  border-radius: 50%;
+  background: rgba(78, 201, 122, 0.12);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.magnify-btn:hover {
+  background: rgba(78, 201, 122, 0.28);
+}
+/* keep the serving badge from sliding under the absolutely-positioned glass */
+.shard-card.scanning .shard-head {
+  padding-right: 22px;
+}
+
+.shard-inspector-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 8, 14, 0.66);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.shard-inspector {
+  width: min(900px, 94vw);
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--good);
+  border-radius: 12px;
+  padding: 20px 24px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
+}
+/* header, explain, query bar and stepper stay pinned; only the middle scrolls */
+.shard-inspector > .si-head,
+.shard-inspector > .si-explain,
+.shard-inspector > .si-query-bar,
+.shard-inspector > .si-stepper {
+  flex: none;
+}
+.si-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.si-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.si-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.si-sub {
+  color: var(--muted);
+  font-weight: 400;
+}
+.si-close {
+  margin-left: auto;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--accent-soft);
+  cursor: pointer;
+  font-size: 13px;
+}
+.si-close:hover {
+  border-color: var(--accent);
+}
+.si-segs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+.si-seg {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 7px 9px;
+  background: var(--bg);
+}
+.si-seg-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+/* ---- close-up stepped query phase ---- */
+.si-explain {
+  background: var(--bg);
+  border-left: 3px solid var(--good);
+  border-radius: 6px;
+  padding: 9px 12px;
+  margin-bottom: 12px;
+}
+.si-explain h4 {
+  margin: 0 0 5px;
+  font-size: 13px;
+}
+.si-explain p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--accent-soft);
+}
+.si-stage {
+  min-height: 170px;
+  margin-bottom: 12px;
+}
+.si-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* step 1 — analyze */
+.si-query {
+  font-size: 13px;
+  color: var(--muted);
+}
+.si-query-str {
+  color: var(--text);
+  font-weight: 600;
+}
+.si-arrow {
+  font-size: 11px;
+  color: var(--good);
+  letter-spacing: 0.5px;
+}
+
+/* steps 2–3 — per-segment term dictionaries + postings */
+.si-dict {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.si-dict-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 3px 6px;
+  border-radius: 5px;
+}
+.si-dict-row.matched {
+  background: rgba(78, 201, 122, 0.1);
+  outline: 1px solid rgba(78, 201, 122, 0.4);
+}
+.si-dict-row.missing {
+  opacity: 0.45;
+}
+.si-dict-row .term {
+  font-family: ui-monospace, Menlo, monospace;
+  font-weight: 700;
+  min-width: 90px;
+}
+.si-dict-row .postings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.si-dict-row .postings-count,
+.si-dict-row .not-here {
+  font-size: 11px;
+  color: var(--muted);
+  font-style: italic;
+}
+.si-dict-more {
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* step 4 — scoring */
+.si-scores {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.si-score-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.si-score-terms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  flex: 1;
+}
+.si-tf {
+  font-size: 11px;
+  font-family: ui-monospace, Menlo, monospace;
+  color: var(--accent-soft);
+  background: var(--panel-2);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.si-score-row .score {
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* step 5 — top-k priority queue */
+.si-pq {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.si-pq-slot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 7px;
+}
+.si-pq-slot.filled {
+  border-style: solid;
+  border-color: var(--good);
+  background: rgba(78, 201, 122, 0.07);
+}
+.si-pq-rank {
+  font-family: ui-monospace, Menlo, monospace;
+  font-weight: 700;
+  color: var(--muted);
+  min-width: 24px;
+}
+.si-evicted {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--danger);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.si-evicted-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  opacity: 0.7;
+}
+
+/* step 6 — return */
+.si-return-note {
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--good);
+}
+
+/* embedded mini-stepper inside the panel */
+.si-stepper .stepper {
+  border-top: 1px solid var(--border);
+  background: transparent;
+  padding: 10px 0 0;
+  gap: 10px;
+}
+.si-stepper .op-label {
+  min-width: 0;
+  font-size: 10px;
+}
+
+/* ---- segment anatomy view ---- */
+.si-query-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+.si-query-label {
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.term-chip.pulse {
+  outline: 2px solid var(--good);
+  outline-offset: 1px;
+}
+
+.si-anatomy {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.anat-card {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg);
+  padding: 9px 11px;
+}
+.anat-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.anat-seg-id {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 700;
+}
+.anat-bitset {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.anat-bit {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+.anat-bit.live {
+  color: var(--good);
+  border-color: rgba(78, 201, 122, 0.4);
+}
+.anat-bit.dead {
+  color: var(--danger);
+  border-color: rgba(224, 87, 74, 0.5);
+  text-decoration: line-through;
+}
+
+.anat-body {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.anat-ii,
+.anat-source {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 7px 8px;
+  transition: border-color 0.25s, box-shadow 0.25s;
+}
+.anat-ii-label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent-2);
+  margin-bottom: 6px;
+}
+.anat-ii-cols {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 8px;
+}
+.anat-col-head {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 3px;
+  margin-bottom: 4px;
+}
+.anat-ii-rows {
+  max-height: 150px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.anat-row {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 8px;
+  align-items: center;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: background 0.2s, opacity 0.2s;
+}
+.anat-row.term-active {
+  background: rgba(78, 201, 122, 0.14);
+  outline: 1px solid rgba(78, 201, 122, 0.45);
+}
+.anat-row.dim {
+  opacity: 0.4;
+}
+.anat-term {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.anat-postings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.anat-source.active {
+  border-color: var(--good);
+  box-shadow: 0 0 0 2px rgba(78, 201, 122, 0.18);
+}
+.anat-doc {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 5px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.anat-doc-text {
+  color: var(--accent-soft);
+}
+
+.si-transient {
+  min-height: 90px;
+  margin-top: 10px;
+}
+
+/* analyze step: query box scanned into extracted tokens */
+.si-analyze {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 0 10px;
+}
+.si-query-box {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 220px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 11px 18px;
+  transition: border-color 0.25s;
+}
+.si-query-box.scanning {
+  border-color: var(--accent);
+}
+.si-query-box .si-query-str {
+  font-size: 15px;
+}
+.si-analyze-arrow {
+  font-size: 11px;
+  color: var(--good);
+  letter-spacing: 0.5px;
+}
+.si-analyze-tokens {
+  justify-content: center;
+  min-height: 24px;
+}

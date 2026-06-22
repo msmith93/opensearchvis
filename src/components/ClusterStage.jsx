@@ -5,7 +5,7 @@ const copyKey = (shard, role) => `${shard}:${role}`
 
 // The centre stage: a coordinator/request bar on top, then the 3-node cluster.
 // Highlights and badges are driven by the current operation + step.
-export default function ClusterStage({ cluster, extra, op }) {
+export default function ClusterStage({ cluster, extra, op, onZoom }) {
   const type = op?.type
   const step = op?.step ?? -1
   const inflight = extra.inflight
@@ -91,6 +91,7 @@ export default function ClusterStage({ cluster, extra, op }) {
                   matched={matched}
                   isServing={isServing}
                   scanning={isServing && step === 2}
+                  onZoom={onZoom}
                   mergeSelecting={
                     type === 'merge' && step === 0 && extra.merge?.shards.includes(shard)
                   }
@@ -113,6 +114,7 @@ function ShardCard({
   matched,
   isServing,
   scanning,
+  onZoom,
   mergeSelecting,
 }) {
   const buffer = shard.buffer.filter((id) => id !== suppressId)
@@ -133,6 +135,15 @@ function ShardCard({
         <span className="shard-id">shard {shard.id}</span>
         <span className={'role-badge ' + role}>{role}</span>
         {isServing && <span className="serving-badge">serving</span>}
+        {scanning && (
+          <button
+            className="magnify-btn"
+            title="Zoom into this shard's local search"
+            onClick={() => onZoom?.(shard.id)}
+          >
+            🔍
+          </button>
+        )}
       </div>
 
       {buffer.length > 0 && (
