@@ -132,7 +132,7 @@ function InspectorBody({ shard, search, docs, query, onClose }) {
   // query term chips fly from the query bar down to each segment's inverted index;
   // a segment scrolled below the fold gets a token that exits the bottom edge.
   function buildLookupFlights() {
-    const from = selectorRect('.si-query-bar')
+    const from = selectorRect('.si-query-box')
     if (!from) return []
     const scRect = selectorRect('.si-scroll')
     const tokens = terms.map((t, i) => ({ id: `q-${i}-${t}`, term: t, color: 'var(--accent)' }))
@@ -215,36 +215,18 @@ function InspectorBody({ shard, search, docs, query, onClose }) {
         <p>{current.blurb}</p>
       </div>
 
+      {/* Persistent query box — stays visible across every phase. */}
+      <QueryBox query={query} terms={terms} step={step} />
+
       <div className="si-scroll">
-        {/* Current step's focus content, ABOVE the persistent anatomy. */}
-        {step === 0 ? (
-          <AnalyzeStage query={query} terms={terms} />
-        ) : (
-          <>
-            <div className="si-query-bar">
-              <span className="si-query-label">query</span>
-              {query && <span className="si-query-str">“{query}”</span>}
-              <span className="si-arrow">→</span>
-              {terms.length ? (
-                terms.map((t) => (
-                  <span key={t} className="term-chip">
-                    {t}
-                  </span>
-                ))
-              ) : (
-                <em className="empty-note">no terms</em>
-              )}
-            </div>
-            {step >= 2 && (
-              <ResultsLane
-                step={step}
-                local={local}
-                terms={terms}
-                docs={docs}
-                revealed={laneRevealed}
-              />
-            )}
-          </>
+        {step >= 2 && (
+          <ResultsLane
+            step={step}
+            local={local}
+            terms={terms}
+            docs={docs}
+            revealed={laneRevealed}
+          />
         )}
 
         <p className="section-title">Segment anatomy — what this shard stores</p>
@@ -484,13 +466,20 @@ function AnatomyCard({ seg, focus, docs }) {
   )
 }
 
-// Step 1 (analyze): the query arrives in a box, a scan-line sweeps it, then the
-// extracted token chips appear — echoing the cluster-level index choreography.
-function AnalyzeStage({ query, terms }) {
-  const [scanning, setScanning] = useState(true)
-  const [showTokens, setShowTokens] = useState(false)
+// Persistent query box — stays visible across ALL phases (the most meaningful
+// part of the flow). On the analyze step a scan-line sweeps the box and the
+// extracted term chips appear (tokenize + normalize); on later steps the terms are
+// shown immediately. Also the source anchor for the step-2 query→segment flights.
+function QueryBox({ query, terms, step }) {
+  const [scanning, setScanning] = useState(step === 0)
+  const [showTokens, setShowTokens] = useState(step !== 0)
 
   useEffect(() => {
+    if (step !== 0) {
+      setScanning(false)
+      setShowTokens(true)
+      return
+    }
     setScanning(true)
     setShowTokens(false)
     const t = setTimeout(() => {
@@ -498,33 +487,32 @@ function AnalyzeStage({ query, terms }) {
       setShowTokens(true)
     }, 1000)
     return () => clearTimeout(t)
-  }, [query])
+  }, [step, query])
 
   return (
-    <div className="si-analyze">
+    <div className="si-querybox">
       <div className={'si-query-box' + (scanning ? ' scanning' : '')}>
         {scanning && <div className="scan-line" />}
         <span className="si-query-label">query</span>
         <span className="si-query-str">“{query}”</span>
-      </div>
-      <div className="si-analyze-arrow">↓ analyze (tokenize + normalize)</div>
-      <div className="chip-row si-analyze-tokens">
-        {showTokens &&
-          (terms.length ? (
+        <span className="si-arrow">→</span>
+        {showTokens ? (
+          terms.length ? (
             terms.map((t, i) => (
               <motion.span
                 key={t}
                 className="term-chip"
-                initial={{ opacity: 0, scale: 0.6, y: -6 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                transition={{ delay: i * 0.08, type: 'spring', stiffness: 320, damping: 22 }}
+                initial={{ opacity: 0, scale: 0.6 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: i * 0.06, type: 'spring', stiffness: 320, damping: 22 }}
               >
                 {t}
               </motion.span>
             ))
           ) : (
             <em className="empty-note">no terms</em>
-          ))}
+          )
+        ) : null}
       </div>
     </div>
   )
