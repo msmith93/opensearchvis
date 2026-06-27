@@ -1095,6 +1095,35 @@ table.ii td.term {
   color: var(--good);
 }
 
+/* persistent results lane (steps 2–5): chips glide between phases via layout */
+.si-lane-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-height: 30px;
+}
+.si-lane-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.si-rank {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  width: 22px;
+}
+.si-lane-terms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  flex: 1;
+}
+.si-lane-item .score {
+  font-weight: 700;
+}
+
 /* embedded mini-stepper inside the panel */
 .si-stepper .stepper {
   border-top: 1px solid var(--border);
