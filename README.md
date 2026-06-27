@@ -11,6 +11,8 @@ response.
 Everything is **simulated client-side** — no backend, no storage. It's built to
 be screen-recorded and stepped through, not to be a configurable cluster.
 
+**Live demo:** [opensearchvis.bitsculpt.top](https://opensearchvis.bitsculpt.top/)
+
 ![OpenSearch Cluster Visualizer](docs/screenshot.png)
 
 ## What it teaches
